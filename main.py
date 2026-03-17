@@ -1,67 +1,35 @@
-import requests
-import psycopg2
-from datetime import datetime
+from fastapi import FastAPI, HTTPException
+from services import get_price
+from database import save_price, get_price_history
 
+app = FastAPI()
 
-def get_price(coin_id):
-    url = "https://api.coingecko.com/api/v3/simple/price"
-
-    parameters = {
-        "ids": coin_id.lower(),
-        "vs_currencies": "usd"
-    }
-    try: 
-        response = requests.get(url, params=parameters)
-        response.raise_for_status()
-        data = response.json()
-
-        if coin_id in data:
-            return data[coin_id]['usd']
-        
-    except KeyError:
-        print("Coin not found! ")
-
+@app.get("/price/{coin_id}")
+def price_endpoint(coin_id: str):
+    price = get_price(coin_id)
     
-try:
-    conn = psycopg2.connect(
-        dbname = "postgres",
-        user = "ivandarlami",
-        password = "password",
-        host = "localhost"
-    )
+    if price is None:
+        raise HTTPException(status_code=404, detail="Coin not found")
+    
+    # Save to database
+    save_price(coin_id, price)
+    
+    return {
+        "coin": coin_id,
+        "price_usd": price,
+        "saved": True
+    }
 
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS prices(
-            id SERIAL PRIMARY KEY,
-            coin_name TEXT,
-            price FLOAT,
-            timestamp TIMESTAMP)            
-    """)
-
-    conn.commit()
-
-    coin = "ethereum"
-    price = get_price(coin)
-
-    cur.execute(
-       "INSERT INTO prices(coin_name, price, timestamp) VALUES (%s, %s, %s)",
-        (coin, price, datetime.now())
-    )
-
-    conn.commit()
-    print("Saved to database!")
-
-    cur.execute("SELECT * FROM prices ORDER BY timestamp DESC LIMIT 5")
-    rows = cur.fetchall() 
-
+@app.get("/history/{coin_id}")
+def history_endpoint(coin_id: str, limit: int = 10):
+    rows = get_price_history(coin_id, limit)
+    
+    history = []
     for row in rows:
-        
-        print(f"{row[3]}: {row[1]} is ${row[2]}")
-
-    cur.close()
-    conn.close()
-
-except Exception as e:
-    print(f"Error: {e}")
+        history.append({
+            "coin": row[1],
+            "price": row[2],
+            "timestamp": row[3].isoformat()
+        })
+    
+    return {"coin": coin_id, "history": history}
